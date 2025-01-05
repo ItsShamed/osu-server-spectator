@@ -7,8 +7,9 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using osu.Game.Beatmaps;
-using osu.Game.Online.API.Requests.Responses;
 using osu.Game.Database;
+using osu.Game.Online.API.Requests.Responses;
+using osu.Game.Online.Rooms;
 using osu.Game.Online.Spectator;
 using osu.Game.Rulesets.Scoring;
 using osu.Game.Scoring;
@@ -35,9 +36,12 @@ namespace osu.Server.Spectator.Hubs.Spectator
         private readonly ScoreUploader scoreUploader;
         private readonly IScoreProcessedSubscriber scoreProcessedSubscriber;
 
+        protected readonly EntityStore<SpectatorWatchGroup> WatchGroups;
+
         public SpectatorHub(
             ILoggerFactory loggerFactory,
             EntityStore<SpectatorClientState> users,
+            EntityStore<SpectatorWatchGroup> watchGroups,
             IDatabaseFactory databaseFactory,
             ScoreUploader scoreUploader,
             IScoreProcessedSubscriber scoreProcessedSubscriber)
@@ -46,6 +50,7 @@ namespace osu.Server.Spectator.Hubs.Spectator
             this.databaseFactory = databaseFactory;
             this.scoreUploader = scoreUploader;
             this.scoreProcessedSubscriber = scoreProcessedSubscriber;
+            WatchGroups = watchGroups;
         }
 
         public async Task BeginPlaySession(long? scoreToken, SpectatorState state)
@@ -182,7 +187,7 @@ namespace osu.Server.Spectator.Hubs.Spectator
             await scoreProcessedSubscriber.RegisterForSingleScoreAsync(Context.ConnectionId, Context.GetUserId(), scoreToken);
         }
 
-        public async Task StartWatchingUser(int userId)
+        public async Task<SpectatorWatchGroup?> StartWatchingUser(int userId)
         {
             Log($"Watching {userId}");
 
@@ -203,11 +208,96 @@ namespace osu.Server.Spectator.Hubs.Spectator
             }
 
             await Groups.AddToGroupAsync(Context.ConnectionId, GetGroupId(userId));
+
+            using (var groupUsage = await GetOrCreateWatchGroup(userId))
+            {
+                SpectatorWatchGroup watchGroup = (groupUsage.Item ??= new SpectatorWatchGroup(userId));
+
+                // If the watch group already contains this user, avoid creating a duplicate
+                if (watchGroup.Spectators.Any(s => s.UserID == Context.GetUserId()))
+                {
+                    await Groups.AddToGroupAsync(Context.ConnectionId, GetGroupId(userId));
+
+                    // Clients don't expect themselves to be included in the watch group
+                    var sanitisedWatchGroup = watchGroup.DeepClone();
+                    sanitisedWatchGroup.Spectators = sanitisedWatchGroup.Spectators.Where(s => s.UserID != Context.GetUserId()).ToList();
+                    return sanitisedWatchGroup;
+                }
+
+                var beforeWatchGroup = watchGroup.DeepClone();
+                var spectatorUser = new SpectatorUser(Context.GetUserId());
+
+                await Clients.User(userId.ToString()).UserBeganWatching(spectatorUser, userId);
+                await Clients.OthersInGroup(GetGroupId(userId)).UserBeganWatching(spectatorUser, userId);
+
+                watchGroup.Spectators.Add(spectatorUser);
+
+                return beforeWatchGroup;
+            }
+        }
+
+        public async Task SendLoadingState(int userId, bool hasLoaded)
+        {
+            using (var usage = await GetWatchGroup(userId))
+            {
+                SpectatorWatchGroup? watchGroup = usage.Item;
+
+                var spectatorUser = watchGroup?.Spectators.FirstOrDefault(s => s.UserID == Context.GetUserId());
+
+                if (spectatorUser == null)
+                    return;
+
+                spectatorUser.HasLoaded = hasLoaded;
+
+                await Clients.User(userId.ToString()).UserLoadingStateChanged(Context.GetUserId(), userId, hasLoaded);
+                await Clients.OthersInGroup(GetGroupId(userId)).UserLoadingStateChanged(Context.GetUserId(), userId, hasLoaded);
+            }
+        }
+
+        public async Task SendBeatmapAvailability(int userId, BeatmapAvailability beatmapAvailability)
+        {
+            using (var usage = await GetWatchGroup(userId))
+            {
+                SpectatorWatchGroup? watchGroup = usage.Item;
+
+                var spectatorUser = watchGroup?.Spectators.FirstOrDefault(s => s.UserID == Context.GetUserId());
+
+                if (spectatorUser == null)
+                    return;
+
+                spectatorUser.BeatmapAvailability = beatmapAvailability;
+
+                await Clients.User(userId.ToString()).UserBeatmapAvailabilityChanged(Context.GetUserId(), userId, beatmapAvailability);
+                await Clients.OthersInGroup(GetGroupId(userId)).UserBeatmapAvailabilityChanged(Context.GetUserId(), userId, beatmapAvailability);
+            }
         }
 
         public async Task EndWatchingUser(int userId)
         {
             await Groups.RemoveFromGroupAsync(Context.ConnectionId, GetGroupId(userId));
+
+            using (var usage = await GetWatchGroup(userId))
+            {
+                try
+                {
+                    if (usage.Item == null)
+                        return;
+
+                    var watchGroup = usage.Item;
+                    var spectatorUser = watchGroup.Spectators.SingleOrDefault(s => s.UserID == Context.GetUserId());
+
+                    if (spectatorUser == null)
+                        return;
+
+                    watchGroup.Spectators.Remove(spectatorUser);
+                    await Clients.Group(GetGroupId(userId)).UserStoppedWatching(spectatorUser, userId);
+                }
+                finally
+                {
+                    if (usage.Item == null || usage.Item.Spectators.Count == 0)
+                        usage.Destroy();
+                }
+            }
         }
 
         public override async Task OnConnectedAsync()
@@ -229,6 +319,9 @@ namespace osu.Server.Spectator.Hubs.Spectator
         }
 
         public static string GetGroupId(int userId) => $"watch:{userId}";
+
+        internal Task<ItemUsage<SpectatorWatchGroup>> GetWatchGroup(long userId) => WatchGroups.GetForUse(userId);
+        internal Task<ItemUsage<SpectatorWatchGroup>> GetOrCreateWatchGroup(long userId) => WatchGroups.GetForUse(userId, true);
 
         private async Task endPlaySession(int userId, SpectatorState state)
         {

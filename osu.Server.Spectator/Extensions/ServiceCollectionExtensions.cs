@@ -2,6 +2,7 @@
 // See the LICENCE file in the repository root for full licence text.
 
 using Microsoft.Extensions.DependencyInjection;
+using osu.Game.Online.Spectator;
 using osu.Server.Spectator.Database;
 using osu.Server.Spectator.Entities;
 using osu.Server.Spectator.Hubs;
@@ -20,6 +21,7 @@ namespace osu.Server.Spectator.Extensions
             return serviceCollection.AddSingleton<EntityStore<SpectatorClientState>>()
                                     .AddSingleton<EntityStore<MultiplayerClientState>>()
                                     .AddSingleton<EntityStore<ServerMultiplayerRoom>>()
+                                    .AddSingleton<EntityStore<SpectatorWatchGroup>>()
                                     .AddSingleton<EntityStore<ConnectionState>>()
                                     .AddSingleton<EntityStore<MetadataClientState>>()
                                     .AddSingleton<GracefulShutdownManager>()
