@@ -11,6 +11,7 @@ using Moq;
 using osu.Game.Beatmaps;
 using osu.Game.Online.API;
 using osu.Game.Online.API.Requests.Responses;
+using osu.Game.Online.Rooms;
 using osu.Game.Online.Spectator;
 using osu.Game.Replays.Legacy;
 using osu.Game.Rulesets.Osu.Mods;
@@ -39,9 +40,12 @@ namespace osu.Server.Spectator.Tests
         private readonly Mock<IScoreStorage> mockScoreStorage;
         private readonly Mock<IDatabaseAccess> mockDatabase;
 
+        private readonly EntityStore<SpectatorWatchGroup> watchGroups;
+
         public SpectatorHubTest()
         {
             var clientStates = new EntityStore<SpectatorClientState>();
+            watchGroups = new EntityStore<SpectatorWatchGroup>();
 
             mockDatabase = new Mock<IDatabaseAccess>();
             mockDatabase.Setup(db => db.GetUsernameAsync(streamer_id)).ReturnsAsync(() => streamer_username);
@@ -65,7 +69,7 @@ namespace osu.Server.Spectator.Tests
 
             var mockScoreProcessedSubscriber = new Mock<IScoreProcessedSubscriber>();
 
-            hub = new SpectatorHub(loggerFactory.Object, clientStates, databaseFactory.Object, scoreUploader, mockScoreProcessedSubscriber.Object);
+            hub = new SpectatorHub(loggerFactory.Object, clientStates, watchGroups, databaseFactory.Object, scoreUploader, mockScoreProcessedSubscriber.Object);
         }
 
         [Fact]
@@ -325,9 +329,14 @@ namespace osu.Server.Spectator.Tests
 
             Mock<IHubCallerClients<ISpectatorClient>> mockClients = new Mock<IHubCallerClients<ISpectatorClient>>();
             Mock<ISpectatorClient> mockCaller = new Mock<ISpectatorClient>();
+            Mock<ISpectatorClient> mockStreamer = new Mock<ISpectatorClient>();
+            Mock<ISpectatorClient> mockSpectators = new Mock<ISpectatorClient>();
 
             mockClients.Setup(clients => clients.Caller).Returns(mockCaller.Object);
             mockClients.Setup(clients => clients.All).Returns(mockCaller.Object);
+            mockClients.Setup(clients => clients.Group(SpectatorHub.GetGroupId(streamer_id))).Returns(mockSpectators.Object);
+            mockClients.Setup(clients => clients.OthersInGroup(SpectatorHub.GetGroupId(streamer_id))).Returns(mockSpectators.Object);
+            mockClients.Setup(clients => clients.User(streamer_id.ToString())).Returns(mockStreamer.Object);
 
             Mock<IGroupManager> mockGroups = new Mock<IGroupManager>();
 
@@ -359,9 +368,16 @@ namespace osu.Server.Spectator.Tests
 
             await hub.StartWatchingUser(streamer_id);
 
+            using (var usage = await hub.GetWatchGroup(streamer_id))
+                Assert.NotNull(usage.Item);
+
             mockGroups.Verify(groups => groups.AddToGroupAsync(connectionId, SpectatorHub.GetGroupId(streamer_id), default));
 
             mockCaller.Verify(clients => clients.UserBeganPlaying(streamer_id, It.Is<SpectatorState>(m => m.Equals(state))), Times.Exactly(ongoing ? 2 : 0));
+
+            mockStreamer.Verify(streamer => streamer.UserBeganWatching(It.Is<SpectatorUser>(m => m.UserID == watcher_id), streamer_id), Times.Once);
+            mockSpectators.Verify(spectator => spectator.UserBeganWatching(It.Is<SpectatorUser>(m => m.UserID == watcher_id), streamer_id), Times.Once);
+            mockCaller.Verify(spectator => spectator.UserBeganWatching(It.Is<SpectatorUser>(m => m.UserID == watcher_id), streamer_id), Times.Never);
         }
 
         [Fact]
@@ -681,6 +697,46 @@ namespace osu.Server.Spectator.Tests
 
             mockScoreStorage.Verify(s => s.WriteAsync(It.Is<Score>(score => score.ScoreInfo.Rank == ScoreRank.A)), Times.Once);
             mockReceiver.Verify(clients => clients.UserFinishedPlaying(streamer_id, It.Is<SpectatorState>(m => m.State == SpectatedUserState.Passed)), Times.Once());
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task StateChangesFromMaliciousSpectatorAreIgnored(bool createUsage)
+        {
+            Mock<IHubCallerClients<ISpectatorClient>> mockClients = new Mock<IHubCallerClients<ISpectatorClient>>();
+            Mock<ISpectatorClient> mockStreamer = new Mock<ISpectatorClient>();
+            Mock<ISpectatorClient> mockReceivers = new Mock<ISpectatorClient>();
+            mockClients.Setup(clients => clients.User(streamer_id.ToString())).Returns(mockStreamer.Object);
+            mockClients.Setup(clients => clients.OthersInGroup(SpectatorHub.GetGroupId(streamer_id))).Returns(mockReceivers.Object);
+
+            Mock<HubCallerContext> mockContext = new Mock<HubCallerContext>();
+
+            mockContext.Setup(context => context.UserIdentifier).Returns(watcher_id.ToString());
+            hub.Clients = mockClients.Object;
+            hub.Context = mockContext.Object;
+
+            if (createUsage)
+            {
+                using (var usage = await hub.GetOrCreateWatchGroup(streamer_id))
+                    usage.Item ??= new SpectatorWatchGroup(streamer_id);
+            }
+
+            if (!createUsage)
+                await Assert.ThrowsAsync<KeyNotFoundException>(() => hub.SendLoadingState(streamer_id, false));
+            else
+                await hub.SendLoadingState(streamer_id, false);
+
+            mockStreamer.Verify(streamer => streamer.UserLoadingStateChanged(watcher_id, streamer_id, false), Times.Never);
+            mockReceivers.Verify(receiver => receiver.UserLoadingStateChanged(watcher_id, streamer_id, false), Times.Never);
+
+            if (!createUsage)
+                await Assert.ThrowsAsync<KeyNotFoundException>(() => hub.SendBeatmapAvailability(streamer_id, BeatmapAvailability.LocallyAvailable()));
+            else
+                await hub.SendBeatmapAvailability(streamer_id, BeatmapAvailability.LocallyAvailable());
+
+            mockStreamer.Verify(streamer => streamer.UserBeatmapAvailabilityChanged(watcher_id, streamer_id, BeatmapAvailability.NotDownloaded()), Times.Never);
+            mockReceivers.Verify(receiver => receiver.UserBeatmapAvailabilityChanged(watcher_id, streamer_id, BeatmapAvailability.NotDownloaded()), Times.Never);
         }
 
         private async Task uploadsCompleteAsync(int attempts = 5)
