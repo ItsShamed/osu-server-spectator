@@ -733,6 +733,61 @@ namespace osu.Server.Spectator.Tests
             mockReceivers.Verify(receiver => receiver.UserBeatmapAvailabilityChanged(watcher_id, streamer_id, BeatmapAvailability.NotDownloaded()), Times.Never);
         }
 
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task WatchersResetWhenStreamerStopsPlayingOrDisconnects(bool disconnect)
+        {
+            Mock<IHubCallerClients<ISpectatorClient>> mockClients = new Mock<IHubCallerClients<ISpectatorClient>>();
+            Mock<ISpectatorClient> mockReceiver = new Mock<ISpectatorClient>();
+            mockClients.Setup(clients => clients.All).Returns(mockReceiver.Object);
+            mockClients.Setup(clients => clients.Group(SpectatorHub.GetGroupId(streamer_id))).Returns(mockReceiver.Object);
+
+            Mock<HubCallerContext> streamerContext = new Mock<HubCallerContext>();
+
+            streamerContext.Setup(context => context.UserIdentifier).Returns(streamer_id.ToString());
+
+            hub.Context = streamerContext.Object;
+            hub.Clients = mockClients.Object;
+
+            SpectatorUser user;
+
+            using (var usage = await hub.GetOrCreateWatchGroup(streamer_id))
+            {
+                SpectatorWatchGroup watchGroup;
+                usage.Item = watchGroup = new SpectatorWatchGroup(streamer_id);
+
+                watchGroup.Spectators.Add(user = new SpectatorUser(watcher_id));
+            }
+
+            await hub.BeginPlaySession(1234, new SpectatorState
+            {
+                BeatmapID = beatmap_id,
+                RulesetID = 0,
+                State = SpectatedUserState.Playing,
+            });
+
+            user.BeatmapAvailability = BeatmapAvailability.LocallyAvailable();
+            user.HasLoaded = true;
+
+            if (disconnect)
+            {
+                await hub.OnDisconnectedAsync(new Exception());
+            }
+            else
+            {
+                await hub.EndPlaySession(new SpectatorState
+                {
+                    BeatmapID = beatmap_id,
+                    RulesetID = 0,
+                    State = SpectatedUserState.Quit
+                });
+            }
+
+            Assert.Equal(user.BeatmapAvailability, BeatmapAvailability.Unknown());
+            Assert.False(user.HasLoaded);
+        }
+
         private async Task uploadsCompleteAsync(int attempts = 5)
         {
             while (scoreUploader.RemainingUsages > 0)
