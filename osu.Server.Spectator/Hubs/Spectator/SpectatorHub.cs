@@ -306,6 +306,7 @@ namespace osu.Server.Spectator.Hubs.Spectator
                         return;
 
                     watchGroup.Spectators.Remove(spectatorUser);
+                    await Clients.User(userId.ToString()).UserStoppedWatching(spectatorUser, userId);
                     await Clients.Group(GetGroupId(userId)).UserStoppedWatching(spectatorUser, userId);
                 }
                 finally
