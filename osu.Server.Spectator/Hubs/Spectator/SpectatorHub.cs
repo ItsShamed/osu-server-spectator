@@ -345,6 +345,24 @@ namespace osu.Server.Spectator.Hubs.Spectator
             if (state.State == SpectatedUserState.Playing)
                 state.State = SpectatedUserState.Quit;
 
+            // Reset watching users states
+            try
+            {
+                using ItemUsage<SpectatorWatchGroup> watchGroupUsage = await GetWatchGroup(userId);
+
+                if (watchGroupUsage.Item != null)
+                {
+                    foreach (var spectatorUser in watchGroupUsage.Item.Spectators)
+                    {
+                        spectatorUser.BeatmapAvailability = BeatmapAvailability.Unknown();
+                        spectatorUser.HasLoaded = false;
+                    }
+                }
+            }
+            catch (KeyNotFoundException)
+            {
+            }
+
             await Clients.All.UserFinishedPlaying(userId, state);
         }
     }
