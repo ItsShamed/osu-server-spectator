@@ -722,18 +722,12 @@ namespace osu.Server.Spectator.Tests
                     usage.Item ??= new SpectatorWatchGroup(streamer_id);
             }
 
-            if (!createUsage)
-                await Assert.ThrowsAsync<KeyNotFoundException>(() => hub.SendLoadingState(streamer_id, false));
-            else
-                await hub.SendLoadingState(streamer_id, false);
+            await hub.SendLoadingState(streamer_id, false);
 
             mockStreamer.Verify(streamer => streamer.UserLoadingStateChanged(watcher_id, streamer_id, false), Times.Never);
             mockReceivers.Verify(receiver => receiver.UserLoadingStateChanged(watcher_id, streamer_id, false), Times.Never);
 
-            if (!createUsage)
-                await Assert.ThrowsAsync<KeyNotFoundException>(() => hub.SendBeatmapAvailability(streamer_id, BeatmapAvailability.LocallyAvailable()));
-            else
-                await hub.SendBeatmapAvailability(streamer_id, BeatmapAvailability.LocallyAvailable());
+            await hub.SendBeatmapAvailability(streamer_id, BeatmapAvailability.LocallyAvailable());
 
             mockStreamer.Verify(streamer => streamer.UserBeatmapAvailabilityChanged(watcher_id, streamer_id, BeatmapAvailability.NotDownloaded()), Times.Never);
             mockReceivers.Verify(receiver => receiver.UserBeatmapAvailabilityChanged(watcher_id, streamer_id, BeatmapAvailability.NotDownloaded()), Times.Never);

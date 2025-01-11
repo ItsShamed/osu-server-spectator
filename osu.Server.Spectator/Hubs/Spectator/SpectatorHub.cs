@@ -238,37 +238,53 @@ namespace osu.Server.Spectator.Hubs.Spectator
 
         public async Task SendLoadingState(int userId, bool hasLoaded)
         {
-            using (var usage = await GetWatchGroup(userId))
+            try
             {
-                SpectatorWatchGroup? watchGroup = usage.Item;
+                using (var usage = await GetWatchGroup(userId))
+                {
+                    SpectatorWatchGroup? watchGroup = usage.Item;
 
-                var spectatorUser = watchGroup?.Spectators.FirstOrDefault(s => s.UserID == Context.GetUserId());
+                    var spectatorUser = watchGroup?.Spectators.FirstOrDefault(s => s.UserID == Context.GetUserId());
 
-                if (spectatorUser == null)
-                    return;
+                    if (spectatorUser == null)
+                        return;
 
-                spectatorUser.HasLoaded = hasLoaded;
+                    spectatorUser.HasLoaded = hasLoaded;
 
-                await Clients.User(userId.ToString()).UserLoadingStateChanged(Context.GetUserId(), userId, hasLoaded);
-                await Clients.OthersInGroup(GetGroupId(userId)).UserLoadingStateChanged(Context.GetUserId(), userId, hasLoaded);
+                    await Clients.User(userId.ToString()).UserLoadingStateChanged(Context.GetUserId(), userId, hasLoaded);
+                    await Clients.OthersInGroup(GetGroupId(userId)).UserLoadingStateChanged(Context.GetUserId(), userId, hasLoaded);
+                }
+            }
+            catch (KeyNotFoundException)
+            {
+                // lack of watch group means that the user did not initialise it via StartWatchingUser
+                // and is currently not watching
             }
         }
 
         public async Task SendBeatmapAvailability(int userId, BeatmapAvailability beatmapAvailability)
         {
-            using (var usage = await GetWatchGroup(userId))
+            try
             {
-                SpectatorWatchGroup? watchGroup = usage.Item;
+                using (var usage = await GetWatchGroup(userId))
+                {
+                    SpectatorWatchGroup? watchGroup = usage.Item;
 
-                var spectatorUser = watchGroup?.Spectators.FirstOrDefault(s => s.UserID == Context.GetUserId());
+                    var spectatorUser = watchGroup?.Spectators.FirstOrDefault(s => s.UserID == Context.GetUserId());
 
-                if (spectatorUser == null)
-                    return;
+                    if (spectatorUser == null)
+                        return;
 
-                spectatorUser.BeatmapAvailability = beatmapAvailability;
+                    spectatorUser.BeatmapAvailability = beatmapAvailability;
 
-                await Clients.User(userId.ToString()).UserBeatmapAvailabilityChanged(Context.GetUserId(), userId, beatmapAvailability);
-                await Clients.OthersInGroup(GetGroupId(userId)).UserBeatmapAvailabilityChanged(Context.GetUserId(), userId, beatmapAvailability);
+                    await Clients.User(userId.ToString()).UserBeatmapAvailabilityChanged(Context.GetUserId(), userId, beatmapAvailability);
+                    await Clients.OthersInGroup(GetGroupId(userId)).UserBeatmapAvailabilityChanged(Context.GetUserId(), userId, beatmapAvailability);
+                }
+            }
+            catch (KeyNotFoundException)
+            {
+                // lack of watch group means that the user did not initialise it via StartWatchingUser
+                // and is currently not watching
             }
         }
 
