@@ -788,6 +788,44 @@ namespace osu.Server.Spectator.Tests
             Assert.False(user.HasLoaded);
         }
 
+        [Fact]
+        public async Task UserStopsWatching()
+        {
+            Mock<IHubCallerClients<ISpectatorClient>> mockClients = new Mock<IHubCallerClients<ISpectatorClient>>();
+            Mock<ISpectatorClient> mockStreamer = new Mock<ISpectatorClient>();
+            Mock<ISpectatorClient> mockReceiver = new Mock<ISpectatorClient>();
+            mockClients.Setup(clients => clients.All).Returns(mockReceiver.Object);
+            mockClients.Setup(clients => clients.User(streamer_id.ToString())).Returns(mockStreamer.Object);
+            mockClients.Setup(clients => clients.Group(SpectatorHub.GetGroupId(streamer_id))).Returns(mockReceiver.Object);
+            mockClients.Setup(clients => clients.OthersInGroup(SpectatorHub.GetGroupId(streamer_id))).Returns(mockReceiver.Object);
+
+            Mock<HubCallerContext> mockContext = new Mock<HubCallerContext>();
+
+            mockContext.Setup(context => context.UserIdentifier).Returns(watcher_id.ToString());
+
+            Mock<IGroupManager> mockGroups = new Mock<IGroupManager>();
+
+            hub.Context = mockContext.Object;
+            hub.Clients = mockClients.Object;
+            hub.Groups = mockGroups.Object;
+
+            SpectatorWatchGroup watchGroup;
+            SpectatorUser user = new SpectatorUser(watcher_id);
+
+            using (var usage = await hub.GetOrCreateWatchGroup(streamer_id))
+            {
+                usage.Item = (watchGroup = new SpectatorWatchGroup(streamer_id));
+                usage.Item.Spectators.Add(user);
+            }
+
+            await hub.EndWatchingUser(streamer_id);
+
+            Assert.DoesNotContain(user, watchGroup.Spectators);
+
+            mockReceiver.Verify(client => client.UserStoppedWatching(user, streamer_id), Times.Once);
+            mockStreamer.Verify(client => client.UserStoppedWatching(user, streamer_id), Times.Once);
+        }
+
         private async Task uploadsCompleteAsync(int attempts = 5)
         {
             while (scoreUploader.RemainingUsages > 0)
